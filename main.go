@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
+	"fmt"
 	"io"
-	"log"
+
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,16 +29,24 @@ func main() {
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
-	logger, err := initializelogger()
+	logger, closeLogger, err := initializelogger()
 	//--- create file where logs from Accesslog would be stored ---
 	if err != nil {
-		logger.Printf("failed to initialize logger: %v\n", err)
+		fmt.Printf("failed to initialize logger: %v\n", err)
 		return 1
 	}
+	// our logger is using a buffer to write to file only when buffer is full
+	// closeLogger closes and flushes the write buffer
+	//we defer closing it at the end of the program execution
+	defer func() {
+		if err := closeLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to close logger: %v\n", err)
+		}
+	}()
 
 	st, err := store.New(dataDir, logger)
 	if err != nil {
-		logger.Printf("failed to create store: %v\n", err)
+		logger.Info("failed to create store: %v\n", err)
 		return 1
 	}
 
@@ -49,28 +60,46 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	logger.Println("Linko is shutting down")
+	logger.Info("Linko is shutting down")
 	if err := s.shutdown(shutdownCtx); err != nil {
-		logger.Printf("failed to shutdown server: %v\n", err)
+		logger.Info("failed to shutdown server: %v\n", err)
 		return 1
 	}
 	if serverErr != nil {
-		log.Printf("server error: %v\n", serverErr)
+		logger.Info("server error: %v\n", serverErr)
 		return 1
 	}
 	return 0
 }
 
-func initializelogger() (*log.Logger, error) {
+func initializelogger() (*slog.Logger, closeFunc, error) {
+	//create a writer object that writes to Stderr only first
 	w := io.Writer(os.Stderr)
 
-	if path, ok := os.LookupEnv("LINKO_LOG_FILE"); ok && path != "" {
-		log.Printf("logger variable provided!: %s", path)
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if logFilePath, ok := os.LookupEnv("LINKO_LOG_FILE"); ok && logFilePath != "" {
+		//if environment variable is provided, make w a multiwriter
+		//that takes Stderr and the file path
+		file, err := os.OpenFile(logFilePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		w = io.MultiWriter(os.Stderr, file)
+		bufferedFile := bufio.NewWriterSize(file, 8192)
+		w = io.MultiWriter(os.Stderr, bufferedFile)
+		close := func() error {
+			if err := bufferedFile.Flush(); err != nil {
+				return fmt.Errorf("failed to flush log file: %w", err)
+			}
+			if err := file.Close(); err != nil {
+				return fmt.Errorf("failed to close log file: %w", err)
+			}
+			return nil
+		}
+		// return log.New(w, "", log.LstdFlags), close, nil
+		return slog.New(slog.NewTextHandler(w, nil)), close, nil
 	}
-	return log.New(w, "", log.LstdFlags), nil
+	close := func() error { return nil }
+	// return log.New(w, "", log.LstdFlags), close, nil
+	return slog.New(slog.NewTextHandler(w, nil)), close, nil
 }
+
+type closeFunc func() error
