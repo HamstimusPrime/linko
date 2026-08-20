@@ -123,33 +123,55 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 			return a
 		}
 
-		//create an empty array and place the string value of the error
-		//as a value for a key with the name "message"
-		attrs := []slog.Attr{
-			{
-				Key:   "message",
-				Value: slog.StringValue(err.Error()),
-			},
+		me, ok := errors.AsType[multiError](err)
+		if !ok {
+			return slog.GroupAttrs("error", errorAttrs(err)...)
 		}
 
-		//pass the error value to the attr method and take the list of
-		//slog.Attr objects that it returns and append them to the attrs list
-
-		attrs = append(attrs, linkoerr.Attrs(err)...)
-
-		//check if error is a stacktrace and send append it
-		//as an slog attribute to attrs
-
-		//--use error to unpack
-		if stackErr, ok := errors.AsType[stackTracer](err); ok {
-			attrs = append(attrs, slog.Attr{
-				Key:   "stack_trace",
-				Value: slog.StringValue(fmt.Sprintf("%+v", stackErr.StackTrace())),
-			})
+		multiErrors := me.Unwrap()
+		var errAttrs []slog.Attr
+		//put each error from multiErrors into a group with the number of their indexes
+		//as their key sa
+		for i, e := range multiErrors {
+			errAttrs = append(errAttrs, slog.GroupAttrs(
+				fmt.Sprintf("error_%d", i+1),
+				errorAttrs(e)...,
+			))
 		}
-		return slog.GroupAttrs("error", attrs...)
+		return slog.GroupAttrs("errors", errAttrs...)
 	}
 	return a
 }
 
+func errorAttrs(err error) []slog.Attr {
+	attrs := []slog.Attr{
+	{
+			Key:   "message",
+			Value: slog.StringValue(err.Error()),
+		},
+	}
+	//pass the error value to the attr method and take the list of
+	//slog.Attr objects that it returns and append them to the attrs list
+
+	attrs = append(attrs, linkoerr.Attrs(err)...)
+
+	//check if error is a stacktrace and send append it
+	//as an slog attribute to attrs
+
+	//--use error to unpack
+	if stackErr, ok := errors.AsType[stackTracer](err); ok {
+		attrs = append(attrs, slog.Attr{
+			Key:   "stack_trace",
+			Value: slog.StringValue(fmt.Sprintf("%+v", stackErr.StackTrace())),
+		})
+	}
+	return attrs
+
+}
+
 type closeFunc func() error
+
+type multiError interface {
+	error
+	Unwrap() []error
+}

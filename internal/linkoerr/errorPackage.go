@@ -66,6 +66,7 @@ func argsToAttr(args []any) []slog.Attr {
 			}
 		default:
 			attr = append(attr, slog.Any("!BADKEY", args[i]))
+			i++
 
 		}
 	}

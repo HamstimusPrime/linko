@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -39,7 +38,8 @@ func New(dir string, logger *slog.Logger) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		dir: dir,
+		dir:    dir,
+		logger: logger,
 	}, nil
 }
 
@@ -72,16 +72,18 @@ func (s *Store) List(ctx context.Context) ([]ShortURL, error) {
 	ch := make(chan ShortURL)
 	go s.walk(ctx, ch)
 	var urls []ShortURL
+	var errs []error
 	for e := range ch {
 		if e.Err != nil {
-			return urls, e.Err
+			errs = append(errs, e.Err)
+			continue
 		}
 		urls = append(urls, e)
 		if len(urls) >= maxURLs {
 			break
 		}
 	}
-	return urls, nil
+	return urls, errors.Join(errs...)
 }
 
 func (s *Store) walk(ctx context.Context, ch chan<- ShortURL) {
@@ -97,20 +99,17 @@ func (s *Store) walk(ctx context.Context, ch chan<- ShortURL) {
 				ch <- ShortURL{Err: linkoerr.WithAttrs(err, "path", filepath.Join(s.dir, e.Name()))}
 				continue
 			}
-
 			ch <- ShortURL{ShortCode: e.Name(), LongURL: long}
 		}
 	}
 }
 
 func (s *Store) Lookup(_ context.Context, short string) (string, error) {
-	fmt.Println("looking file up")
 	short = strings.ToUpper(short)
 	shortcodeFilepath := filepath.Join(s.dir, short)
 	data, err := os.ReadFile(shortcodeFilepath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", ErrNotFound
-
 	}
 	if err != nil {
 		return "", err
