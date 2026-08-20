@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -16,20 +16,36 @@ type server struct {
 	httpServer *http.Server
 	store      store.Store
 	cancel     context.CancelFunc
+	logger     *slog.Logger
 }
 
-func newServer(store store.Store, port int, cancel context.CancelFunc) *server {
+func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+			logger.Info(
+				"Served request",
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.EscapedPath()),
+				slog.String("client_ip", r.RemoteAddr),
+			)
+		})
+	}
+}
+
+func newServer(store store.Store, port int, logger *slog.Logger, cancel context.CancelFunc) *server {
 	mux := http.NewServeMux()
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
+		Handler: requestLogger(logger)(mux),
 	}
 
 	s := &server{
 		httpServer: srv,
 		store:      store,
 		cancel:     cancel,
+		logger:     logger,
 	}
 
 	mux.HandleFunc("GET /", s.handlerIndex)
@@ -57,12 +73,12 @@ func (s *server) start() error {
 		return errors.New("unable to assert listener")
 	}
 	port := addr.Port
-	logger.Printf("Linko is running on http://localhost:%d\n", port)
+	s.logger.Debug(fmt.Sprintf("Linko is running on http://localhost:%d\n", port))
 	return nil
 }
 
 func (s *server) shutdown(ctx context.Context) error {
-	log.Println("Linko is shutting down")
+	s.logger.Debug("Linko is shutting down")
 	return s.httpServer.Shutdown(ctx)
 }
 
