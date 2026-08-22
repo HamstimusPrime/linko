@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"boot.dev/linko/internal/store"
 )
@@ -19,15 +21,58 @@ type server struct {
 	logger     *slog.Logger
 }
 
+type spyRequestReadCloser struct {
+	io.ReadCloser
+	bytesRead int
+}
+
+func (s *spyRequestReadCloser) Read(p []byte) (int, error) {
+	numReadBytes, err := s.ReadCloser.Read(p)
+	s.bytesRead += numReadBytes
+	return s.bytesRead, err
+}
+
+type spyResponseWriter struct {
+	http.ResponseWriter
+	bytesWritten   int
+	httpStatusCode int
+}
+
+func (s *spyResponseWriter) Write(p []byte) (int, error) {
+	//by convention, the write method calls the Writer method passing it an http.StatusOk value
+	//if the status code of the wrapper spyResponseWriter struct has not been modified(i.e its values is the zero value of an integer 0)
+	//set its value to the http.StatusOK value
+	if s.httpStatusCode == 0 {
+		s.httpStatusCode = http.StatusOK
+	}
+	b, err := s.ResponseWriter.Write(p)
+	s.bytesWritten += b
+	return b, err
+}
+
+func (s *spyResponseWriter) WriteHeader(statusCode int) {
+	s.httpStatusCode = statusCode
+	s.ResponseWriter.WriteHeader(statusCode)
+}
+
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			startTime := time.Now()
+			spyRequest := &spyRequestReadCloser{ReadCloser: r.Body}
+			r.Body = spyRequest
+			spyWriter := &spyResponseWriter{ResponseWriter: w}
+			w = spyWriter
 			next.ServeHTTP(w, r)
 			logger.Info(
 				"Served request",
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.EscapedPath()),
 				slog.String("client_ip", r.RemoteAddr),
+				slog.Duration("duration", time.Since(startTime)),
+				slog.Int("request_body_bytes", spyRequest.bytesRead),
+				slog.Int("response_body_bytes", spyWriter.bytesWritten),
+				slog.Int("response_status", spyWriter.httpStatusCode),
 			)
 		})
 	}

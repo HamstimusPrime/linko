@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"boot.dev/linko/internal/build"
 	"boot.dev/linko/internal/linkoerr"
 	"boot.dev/linko/internal/store"
 
@@ -36,6 +37,21 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 		logger.Info(fmt.Sprintf("failed to setup logger: %v", err))
 		return 1
 	}
+
+	env := os.Getenv("ENV")
+	hostName, err := os.Hostname()
+	if err != nil{
+		logger.Error("failed to get hostname, exiting program...")
+		return 1
+	}
+	logger = logger.With(
+		slog.String("git_sha", build.GitSHA),
+		slog.String("build_time", build.BuildTime),
+		slog.String("env", env),
+		slog.String("hostname", hostName),
+
+
+	)
 
 	defer func() {
 		err = closeFunc()
@@ -145,7 +161,7 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 
 func errorAttrs(err error) []slog.Attr {
 	attrs := []slog.Attr{
-	{
+		{
 			Key:   "message",
 			Value: slog.StringValue(err.Error()),
 		},
