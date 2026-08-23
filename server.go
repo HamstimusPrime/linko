@@ -55,17 +55,26 @@ func (s *spyResponseWriter) WriteHeader(statusCode int) {
 	s.ResponseWriter.WriteHeader(statusCode)
 }
 
+const logContextKey contextKey = "log_context"
+
+type LogContext struct {
+	Username string
+}
+
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			startTime := time.Now()
 			spyRequest := &spyRequestReadCloser{ReadCloser: r.Body}
 			r.Body = spyRequest
+			logCtx := &LogContext{}
+			ctx := context.WithValue(r.Context(), logContextKey, logCtx)
+			r = r.WithContext(ctx)
 			spyWriter := &spyResponseWriter{ResponseWriter: w}
 			w = spyWriter
 			next.ServeHTTP(w, r)
-			logger.Info(
-				"Served request",
+
+			attr := []any{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.EscapedPath()),
 				slog.String("client_ip", r.RemoteAddr),
@@ -73,7 +82,13 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				slog.Int("request_body_bytes", spyRequest.bytesRead),
 				slog.Int("response_body_bytes", spyWriter.bytesWritten),
 				slog.Int("response_status", spyWriter.httpStatusCode),
-			)
+			}
+			if logCtx.Username != "" {
+				attr = append(attr, slog.String("user", logCtx.Username))
+			}
+
+			logger.Info("Served request", attr...)
+
 		})
 	}
 }
