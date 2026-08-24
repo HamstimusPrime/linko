@@ -59,6 +59,16 @@ const logContextKey contextKey = "log_context"
 
 type LogContext struct {
 	Username string
+	Error    error
+}
+
+func httpError(ctx context.Context, w http.ResponseWriter, statusCode int, err error) {
+	//assert that context is of type LogContext
+	if logCtx, ok := ctx.Value(logContextKey).(*LogContext); ok {
+		logCtx.Error = err
+	}
+	http.Error(w, err.Error(), statusCode)
+
 }
 
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
@@ -87,6 +97,10 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				attr = append(attr, slog.String("user", logCtx.Username))
 			}
 
+			if logCtx.Error != nil {
+				attr = append(attr, slog.Any("error", logCtx.Error))
+
+			}
 			logger.Info("Served request", attr...)
 
 		})
