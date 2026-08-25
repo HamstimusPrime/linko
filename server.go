@@ -92,7 +92,9 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				slog.Int("request_body_bytes", spyRequest.bytesRead),
 				slog.Int("response_body_bytes", spyWriter.bytesWritten),
 				slog.Int("response_status", spyWriter.httpStatusCode),
+				slog.String("request_id", r.Header.Get("X-Request-ID")),
 			}
+
 			if logCtx.Username != "" {
 				attr = append(attr, slog.String("user", logCtx.Username))
 			}
@@ -112,7 +114,7 @@ func newServer(store store.Store, port int, logger *slog.Logger, cancel context.
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: requestLogger(logger)(mux),
+		Handler: requestID(requestLogger(logger)(mux)),
 	}
 
 	s := &server{

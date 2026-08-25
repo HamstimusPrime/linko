@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -69,4 +70,18 @@ func (s *server) validatePassword(password, stored string) (bool, error) {
 
 	}
 	return true, nil
+}
+
+func requestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		//parse request Header and get field called X-Request-ID
+		requestID := r.Header.Get("X-Request-ID")
+
+		//generate one if one isnt present using rand.Text
+		if requestID == "" {
+			requestID = rand.Text()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		next.ServeHTTP(w, r)
+	})
 }
