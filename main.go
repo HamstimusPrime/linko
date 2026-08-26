@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -15,6 +14,10 @@ import (
 	"boot.dev/linko/internal/build"
 	"boot.dev/linko/internal/linkoerr"
 	"boot.dev/linko/internal/store"
+
+	"github.com/lmittmann/tint"
+	"github.com/mattn/go-isatty"
+	"github.com/natefinch/lumberjack"
 
 	pkgerr "github.com/pkg/errors"
 )
@@ -40,7 +43,7 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 
 	env := os.Getenv("ENV")
 	hostName, err := os.Hostname()
-	if err != nil{
+	if err != nil {
 		logger.Error("failed to get hostname, exiting program...")
 		return 1
 	}
@@ -49,8 +52,6 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 		slog.String("build_time", build.BuildTime),
 		slog.String("env", env),
 		slog.String("hostname", hostName),
-
-
 	)
 
 	defer func() {
@@ -88,43 +89,51 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 
 }
 
-func initializeLogger(logFileAddress string) (*slog.Logger, closeFunc, error) {
-	debugHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level:       slog.LevelDebug,
-		ReplaceAttr: replaceAttr,
-	})
-
-	if logFileAddress != "" {
-		logFile, err := os.OpenFile(logFileAddress, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
-		if err != nil {
-			errObj := errors.New("problme writing to log file")
-			return nil, func() error { return errObj }, errObj
-		}
-		bufferedFile := bufio.NewWriterSize(logFile, 8192)
-		infoHandler := slog.NewJSONHandler(bufferedFile, &slog.HandlerOptions{
-			Level:       slog.LevelInfo,
+func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
+	handlers := []slog.Handler{
+		tint.NewTextHandler(os.Stderr, &tint.Options{
+			Level:       slog.LevelDebug,
 			ReplaceAttr: replaceAttr,
-		})
+			NoColor:     !(isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())),
+		}),
+	}
+	closers := []closeFunc{}
 
-		closeFunc := func() error {
-			err := bufferedFile.Flush()
-			if err != nil {
-				return fmt.Errorf("failed to flush buffer. err: %v", err)
+	if logFile != "" {
+
+		logger := &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    1,
+			MaxAge:     28,
+			MaxBackups: 10,
+			LocalTime:  false,
+			Compress:   true,
+		}
+		handlers = append(handlers, slog.NewJSONHandler(logger, &slog.HandlerOptions{
+			ReplaceAttr: replaceAttr,
+		}))
+
+		close := func() error {
+			if err := logger.Close(); err != nil {
+				return fmt.Errorf("failed to flush log file: %w", err)
 			}
-			err = logFile.Close()
-			if err != nil {
-				return fmt.Errorf("failed to close file. err: %v", err)
+			if err := logger.Close(); err != nil {
+				return fmt.Errorf("failed to close log file: %w", err)
 			}
 			return nil
 		}
-		logger := slog.New(slog.NewMultiHandler(debugHandler, infoHandler))
-
-		return logger, closeFunc, nil
+		closers = append(closers, close)
 	}
-	closeFunc := func() error { return nil }
-	logger := slog.New(debugHandler)
-
-	return logger, closeFunc, nil
+	closer := func() error {
+		var errs []error
+		for _, close := range closers {
+			if err := close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	return slog.New(slog.NewMultiHandler(handlers...)), closer, nil
 }
 
 type stackTracer interface {
