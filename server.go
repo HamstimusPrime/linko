@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"boot.dev/linko/internal/store"
@@ -30,6 +32,38 @@ func (s *spyRequestReadCloser) Read(p []byte) (int, error) {
 	numReadBytes, err := s.ReadCloser.Read(p)
 	s.bytesRead += numReadBytes
 	return s.bytesRead, err
+}
+
+func (s *server) start() error {
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return err
+	}
+	if err := s.httpServer.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+
+		return errors.New("unable to assert listener")
+	}
+	port := addr.Port
+	s.logger.Debug(fmt.Sprintf("Linko is running on http://localhost:%d\n", port))
+	return nil
+}
+
+func (s *server) shutdown(ctx context.Context) error {
+	s.logger.Debug("Linko is shutting down")
+	return s.httpServer.Shutdown(ctx)
+}
+
+func (s *server) handlerShutdown(w http.ResponseWriter, r *http.Request) {
+	if os.Getenv("ENV") == "production" {
+		http.NotFound(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	go s.cancel()
 }
 
 type spyResponseWriter struct {
@@ -67,7 +101,39 @@ func httpError(ctx context.Context, w http.ResponseWriter, statusCode int, err e
 	if logCtx, ok := ctx.Value(logContextKey).(*LogContext); ok {
 		logCtx.Error = err
 	}
+	genericCodes := []int{401, 403, 500}
+	if slices.Contains(genericCodes, statusCode) {
+		errMsg := http.StatusText(statusCode)
+		http.Error(w, errMsg, statusCode)
+		return
+	}
 	http.Error(w, err.Error(), statusCode)
+
+}
+
+func redactIP(addr string) string {
+
+	if hostname, _, err := net.SplitHostPort(addr); err == nil {
+		addr = hostname
+	}
+
+	addr = strings.Trim(addr, "[]")
+	IP := net.ParseIP(addr)
+	if IP == nil {
+		return ""
+	}
+
+	validIPV4 := net.IP.To4(IP)
+	if validIPV4 != nil {
+		parts := strings.Split(addr, ".")
+		parts[len(parts)-1] = "x"
+		return strings.Join(parts, ".")
+
+	} else {
+		parts := strings.Split(addr, ":")
+		parts[len(parts)-1] = "x"
+		return "[" + strings.Join(parts, ":") + "]"
+	}
 
 }
 
@@ -87,7 +153,7 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 			attr := []any{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.EscapedPath()),
-				slog.String("client_ip", r.RemoteAddr),
+				slog.String("client_ip", redactIP(r.RemoteAddr)),
 				slog.Duration("duration", time.Since(startTime)),
 				slog.Int("request_body_bytes", spyRequest.bytesRead),
 				slog.Int("response_body_bytes", spyWriter.bytesWritten),
@@ -133,36 +199,4 @@ func newServer(store store.Store, port int, logger *slog.Logger, cancel context.
 	mux.HandleFunc("POST /admin/shutdown", s.handlerShutdown)
 
 	return s
-}
-
-func (s *server) start() error {
-	ln, err := net.Listen("tcp", s.httpServer.Addr)
-	if err != nil {
-		return err
-	}
-	if err := s.httpServer.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-
-		return errors.New("unable to assert listener")
-	}
-	port := addr.Port
-	s.logger.Debug(fmt.Sprintf("Linko is running on http://localhost:%d\n", port))
-	return nil
-}
-
-func (s *server) shutdown(ctx context.Context) error {
-	s.logger.Debug("Linko is shutting down")
-	return s.httpServer.Shutdown(ctx)
-}
-
-func (s *server) handlerShutdown(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("ENV") == "production" {
-		http.NotFound(w, r)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	go s.cancel()
 }
