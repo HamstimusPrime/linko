@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func Test_requestLogger(t *testing.T) {
+func Test_samplerequestLogger(t *testing.T) {
 	logBuffer := &bytes.Buffer{}
 
 	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{

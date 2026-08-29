@@ -200,3 +200,4 @@ func newServer(store store.Store, port int, logger *slog.Logger, cancel context.
 
 	return s
 }
+
