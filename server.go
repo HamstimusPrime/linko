@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"boot.dev/linko/internal/store"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type server struct {
@@ -180,7 +181,7 @@ func newServer(store store.Store, port int, logger *slog.Logger, cancel context.
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: requestID(requestLogger(logger)(mux)),
+		Handler: metricsMiddleware(requestID(requestLogger(logger)(mux))),
 	}
 
 	s := &server{
@@ -190,6 +191,7 @@ func newServer(store store.Store, port int, logger *slog.Logger, cancel context.
 		logger:     logger,
 	}
 
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /", s.handlerIndex)
 	mux.Handle("POST /api/login", s.authMiddleware(http.HandlerFunc(s.handlerLogin)))
 	mux.Handle("POST /api/shorten", s.authMiddleware(http.HandlerFunc(s.handlerShortenLink)))
@@ -200,4 +202,3 @@ func newServer(store store.Store, port int, logger *slog.Logger, cancel context.
 
 	return s
 }
-
