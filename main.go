@@ -36,6 +36,19 @@ func main() {
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
+	traceFunc, err := initTracing(ctx)
+	if err != nil {
+		fmt.Printf("failed to initialize tracing: %v\n", err)
+		return 1
+	}
+	defer func() int {
+		err = traceFunc(context.Background())
+		if err != nil {
+			return 1
+		}
+		return 0
+	}()
+
 	logFileAddress := os.Getenv("LINKO_LOG_FILE")
 	logger, closeFunc, err := initializeLogger(logFileAddress)
 	if err != nil {

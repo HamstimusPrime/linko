@@ -6,7 +6,10 @@ import (
 	"net/http"
 )
 
-func checkDestination(targetURL string) error {
+func checkDestination(r *http.Request, targetURL string) error {
+	_, span := tracer.Start(r.Context(), "http.verify_destination")
+	defer span.End()
+
 	resp, err := http.DefaultClient.Get(targetURL)
 	if err != nil {
 		return fmt.Errorf("destination unreachable: %w", err)

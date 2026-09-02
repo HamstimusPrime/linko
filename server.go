@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"boot.dev/linko/internal/store"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type server struct {
@@ -178,10 +179,11 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 func newServer(store store.Store, port int, logger *slog.Logger, cancel context.CancelFunc) *server {
 	mux := http.NewServeMux()
+	h := otelhttp.NewHandler
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: metricsMiddleware(requestID(requestLogger(logger)(mux))),
+		Handler: h(metricsMiddleware(requestID(requestLogger(logger)(mux))), "http.server"),
 	}
 
 	s := &server{
